@@ -12,11 +12,9 @@
 #include <map>
 #define ADDRESS "239.255.24.25"
 #define PORT 23456
-std::map <char*, char*> table;
-struct Entry {
-  char * username;
-  char * address;
-};
+#define PORT2 23457
+
+std::map <std::string, std::string> table;
 
 struct Params {
     char* username;
@@ -69,8 +67,11 @@ void *read(void *input){
       char name[nbytes - 8];
       memcpy( name, &msgbuf[9], nbytes - 9 );
       name[nbytes - 8] = '\0';
-      char* temp_addr = inet_ntoa(addr.sin_addr);
-      table[name] = temp_addr;
+      std::string temp_addr(inet_ntoa(addr.sin_addr));
+      std::string temp_name(name);
+      table[temp_name] = temp_addr;
+      std::cout << "announce: " << name << std::endl;
+
     }
     else {
     std::cout << "message: " << msgbuf << std::endl;
@@ -80,8 +81,31 @@ void *read(void *input){
 }
 
 void *privateread(void *input){
+  struct sockaddr_in si_me, si_other;
+  int s;
+  socklen_t slen=sizeof(si_other);
+  int BUFLEN = 256;
+  char buf[BUFLEN];
+  if ((s=socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP))==-1)
+    perror("cannot create socket");
+  int reuse = 1;
+  if (setsockopt(s, SOL_SOCKET, SO_REUSEPORT, (const char*)&reuse, sizeof(reuse)) < 0) {
+        fprintf(stderr, "setsockopt: %d\n", errno);
+        return 0;
+    }
+  memset((char *) &si_me, 0, sizeof(si_me));
+  si_me.sin_family = AF_INET;
+  si_me.sin_port = htons(PORT2);
+  si_me.sin_addr.s_addr = htonl(INADDR_ANY);
+  if (bind(s, (struct sockaddr *) &si_me, sizeof(si_me))==-1)
+    perror("cannot bind");
+  if (recvfrom(s, buf, BUFLEN, 0, (struct sockaddr *) &si_other, &slen)==-1)
+    perror("error receiving");
+  printf("Received packet from %s:%d\nData: %s\n\n", inet_ntoa(si_other.sin_addr), ntohs(si_other.sin_port), buf);
 
+  return 0;
 }
+
 int main(int argc , char *argv[])
 {
 
@@ -159,6 +183,37 @@ int main(int argc , char *argv[])
     std::cout << p2 << std::endl;
     if(strncmp(p,"/",1) == 0){
       //private message
+
+      //parse username
+      char * pch;
+      pch = strtok(p," ");
+      char name[sizeof(pch) - 1];
+      memcpy( name, &pch[1], sizeof(pch) - 1 );
+      std::string temp_name(name);
+      std::map<std::string, std::string>::iterator it = table.find(temp_name);
+      if (it == table.end())
+        std::cout << "Not in table" << std::endl;
+      else
+      {
+        //if username in db
+        //send p2 to address
+        struct sockaddr_in si_other;
+        int s;
+        socklen_t slen=sizeof(si_other);
+        int buflen = 256;
+        if ((s=socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP))==-1)
+          std::cout << "Socket error" << std::endl;
+        memset((char *) &si_other, 0, sizeof(si_other));
+        si_other.sin_family = AF_INET;
+        si_other.sin_port = htons(PORT2);
+        if (inet_aton(it->second.c_str(), &si_other.sin_addr)==0) {
+          fprintf(stderr, "inet_aton() failed\n");
+          exit(1);
+        }
+        if (sendto(s, p2, buflen, 0, (struct sockaddr *) &si_other, slen)==-1)
+          std::cout << "send error" << std::endl;
+
+    }
     }
     else {
       if ((sendto(s, p2, newsize, 0, (struct sockaddr *) &params.myaddr, sizeof(params.myaddr))) < 0){
@@ -175,6 +230,11 @@ int main(int argc , char *argv[])
            exit(-1);
         }
   rc = pthread_join(reader, &status);
+        if (rc){
+           std::cout << "Error:unable to join," << rc << std::endl;
+           exit(-1);
+        }
+  rc = pthread_join(privatereader, &status);
         if (rc){
            std::cout << "Error:unable to join," << rc << std::endl;
            exit(-1);
